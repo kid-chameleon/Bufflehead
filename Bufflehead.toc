@@ -1,7 +1,7 @@
-## Interface: 110107
+## Interface: 11509, 20506, 50504, 120100, 16001
 ## Title: Bufflehead
 ## Notes: Skins player buffs and debuffs
-## Author: Tojaso/Tomber, Dorana, Dicebar
+## Author: Tojaso/Tomber, Dorana, Dicebar, kid-chameleon
 ## Version: @project-version@
 ## DefaultState: enabled
 ## OptionalDependencies: Masque
@@ -12,3 +12,4 @@ Templates.xml
 Main.lua
 Profile.lua
 Shims.lua
+Container.lua

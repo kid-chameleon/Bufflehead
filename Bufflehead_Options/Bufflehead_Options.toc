@@ -1,4 +1,4 @@
-## Interface: 110002
+## Interface: 11509, 20506, 50504, 120100, 16001
 ## Title: Bufflehead Options
 ## Notes: Load-on-demand options for Bufflehead
 ## Author: Tojaso/Tomber, Dorana, Dicebar
