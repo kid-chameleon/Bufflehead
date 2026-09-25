@@ -405,6 +405,16 @@ function MOD.TogglePreviews()
 	MOD.UpdateAll()
 end
 
+-- Register the events a Blizzard aura frame listens to, undoing UnregisterAllEvents
+local function RestoreAuraFrameEvents(frame)
+	if frame.AuraFrameEventListener_OnLoad then
+		frame:AuraFrameEventListener_OnLoad()
+		if frame == BuffFrame then frame:RegisterEvent("WEAPON_ENCHANT_CHANGED"); frame:RegisterEvent("WEAPON_SLOT_CHANGED") end
+	else
+		frame:RegisterEvent("UNIT_AURA")
+	end
+end
+
 -- Show or hide the blizzard buff frames, called during update so synched with other changes
 function MOD.CheckBlizzFrames()
 	if not MOD.isClassic and C_PetBattles and C_PetBattles.IsInBattle() then return end -- don't change visibility of any frame during pet battles
@@ -423,16 +433,18 @@ function MOD.CheckBlizzFrames()
 		blizzHidden = true
 		if not MOD.isClassic and DebuffFrame then
 			DebuffFrame:Hide();
+			DebuffFrame:UnregisterAllEvents()
 		end
 		if TemporaryEnchantFrame then
 			TemporaryEnchantFrame:Hide();
 		end
 	elseif show then
 		BuffFrame:Show()
-		BuffFrame:RegisterEvent("UNIT_AURA")
+		RestoreAuraFrameEvents(BuffFrame)
 		blizzHidden = false
 		if not MOD.isClassic and DebuffFrame then
 			DebuffFrame:Show();
+			RestoreAuraFrameEvents(DebuffFrame)
 		end
 		if TemporaryEnchantFrame then
 			TemporaryEnchantFrame:Show();
