@@ -3,10 +3,10 @@ enable-nolib-creation: no
 
 ignore:
  - .pkgmeta
+ - pkgmeta.yaml
  - README.md
  - Description.txt
- - Bufflehead_Classic.toc
- - Bufflehead_Options/Bufflehead_Options_Classic.toc
+ - doc
 
 externals:
   Libs/Ace3/AceAddon-3.0: https://repos.wowace.com/wow/ace3/trunk/AceAddon-3.0
@@ -23,7 +23,7 @@ externals:
   Bufflehead_Options/Libs/AceGUI-3.0-SharedMediaWidgets: https://repos.wowace.com/wow/ace-gui-3-0-shared-media-widgets/trunk/AceGUI-3.0-SharedMediaWidgets
 
 move-folders:
-    Bufflehead/Bufflehead_Options: Bufflehead_Options
+  Bufflehead/Bufflehead_Options: Bufflehead_Options
 
 manual-changelog:
  filename: CHANGELOG.md

@@ -24,6 +24,10 @@ MOD.isClassic = (WOW_PROJECT_ID == WOW_PROJECT_CLASSIC)
 	or (WOW_PROJECT_ID == WOW_PROJECT_CATACLYSM_CLASSIC)
 	or (WOW_PROJECT_ID == WOW_PROJECT_MISTS_CLASSIC)
 
+
+-- Use the AuraContainer code in restricted environments
+MOD.useContainer = (C_Secrets and C_Secrets.HasSecretRestrictions and C_Secrets.HasSecretRestrictions()) or false
+
 MOD.frame = nil
 MOD.headers = {}
 MOD.previews = {}
@@ -112,6 +116,13 @@ local function PSetPoint(frame, point, relativeFrame, relativePoint, x, y)
 	if frame then
 		frame:SetPoint(point, relativeFrame, relativePoint, x or 0, y or 0)
 	end
+end
+
+-- Return the color for a debuff type
+local function GetDebuffTypeColor(btype)
+	if _G.DebuffTypeColor then return _G.DebuffTypeColor[btype] end
+	if AuraUtil and AuraUtil.GetAuraBorderColor then return AuraUtil.GetAuraBorderColor((btype ~= "none") and btype or nil) end
+	return nil
 end
 
 -- Print debug messages with variable number of arguments in a useful format
@@ -295,6 +306,8 @@ function MOD:OnEnable()
 	self:RegisterEvent("UI_SCALE_CHANGED", UIScaleChanged)
 	self:RegisterEvent("PLAYER_ENTERING_WORLD")
 	self:RegisterEvent("PLAYER_REGEN_ENABLED")
+	-- auras are also secret in PvP matches, encounters, and on restricted maps, which end without a regen event
+	if MOD.useContainer then self:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED", MOD.RestrictionChanged) end
 end
 
 -- Event called when play starts, initialize subsystems that had to wait for system bootstrap
@@ -308,15 +321,21 @@ function MOD:PLAYER_ENTERING_WORLD()
 		for name, group in pairs(pp.groups) do
 			if group.enabled then -- create header for enabled group, must do /reload if change header-related options
 				local unit, filter = group.unit, group.filter
-				local header = CreateFrame("Frame", name, UIParent, "SecureAuraHeaderTemplate")
+				local header
+				if MOD.useContainer then
+					header = MOD.CreateContainer(name, unit, filter)
+				else
+					header = CreateFrame("Frame", name, UIParent, "SecureAuraHeaderTemplate")
+					header:SetAttribute("unit", unit)
+					header:SetAttribute("filter", filter)
+					RegisterAttributeDriver(header, "state-visibility", "[petbattle] hide; show")
+				end
 				header:SetFrameLevel(HEADER_FRAME_LEVEL)
 				--header:SetClampedToScreen(true)
-				header:SetAttribute("unit", unit)
-				header:SetAttribute("filter", filter)
-				RegisterAttributeDriver(header, "state-visibility", "[petbattle] hide; show")
+				header.filter = filter
 				MOD.headers[name] = header
 
-				if (unit == "player") then
+				if (unit == "player") and not MOD.useContainer then
 					RegisterAttributeDriver(header, "unit", "[vehicleui] vehicle; player")
 					if filter == FILTER_BUFFS then
 						header:SetAttribute("consolidateDuration", -1) -- no consolidation
@@ -344,6 +363,11 @@ end
 -- Event called when leaving combat
 function MOD:PLAYER_REGEN_ENABLED(e)
 	if updateAll then MOD.UpdateAll() end
+end
+
+-- Event called when an addon restriction starts or ends, sequenced after the restriction is lifted
+function MOD.RestrictionChanged()
+	if updateAll and not C_Secrets.ShouldAurasBeSecret() then MOD.UpdateAll() end
 end
 
 -- Create a data broker and minimap icon for the addon
@@ -383,7 +407,7 @@ end
 
 -- Show or hide the blizzard buff frames, called during update so synched with other changes
 function MOD.CheckBlizzFrames()
-	if not MOD.isClassic and C_PetBattles.IsInBattle() then return end -- don't change visibility of any frame during pet battles
+	if not MOD.isClassic and C_PetBattles and C_PetBattles.IsInBattle() then return end -- don't change visibility of any frame during pet battles
 	local frame = _G.BuffFrame
 	local hide, show = false, false
 	local visible = frame:IsShown()
@@ -397,7 +421,7 @@ function MOD.CheckBlizzFrames()
 		BuffFrame:Hide()
 		BuffFrame:UnregisterAllEvents()
 		blizzHidden = true
-		if not MOD.isClassic then
+		if not MOD.isClassic and DebuffFrame then
 			DebuffFrame:Hide();
 		end
 		if TemporaryEnchantFrame then
@@ -405,10 +429,9 @@ function MOD.CheckBlizzFrames()
 		end
 	elseif show then
 		BuffFrame:Show()
-		TemporaryEnchantFrame:Show()
 		BuffFrame:RegisterEvent("UNIT_AURA")
 		blizzHidden = false
-		if not MOD.isClassic then
+		if not MOD.isClassic and DebuffFrame then
 			DebuffFrame:Show();
 		end
 		if TemporaryEnchantFrame then
@@ -470,7 +493,8 @@ function MOD:Button_OnLoad(button)
 		for k, v in pairs(MSQ_ButtonData) do button.buttonData[k] = v end
 	end
 
-	button:SetScript("OnAttributeChanged", MOD.Button_OnAttributeChanged)
+	-- aura container buttons refuse scripts from addons
+	if not button.SetCancelAuraButtons then button:SetScript("OnAttributeChanged", MOD.Button_OnAttributeChanged) end
 end
 
 -- Trim and scale icon
@@ -479,6 +503,43 @@ local function IconTextureTrim(tex, icon, trim, iconSize)
 	if trim then left = 0.07; right = 0.93; top = 0.07; bottom = 0.93 end -- trim removes 7% of edges
 	tex:SetTexCoord(left, right, top, bottom) -- set the corner coordinates
 	PSetSize(tex, iconSize, iconSize)
+	icon.iconTextureSize = iconSize
+end
+
+-- Draw a border of solid edges around a frame, plus a background, using plain textures instead of a backdrop
+local pixelBorderEdges = { "top", "bottom", "left", "right" }
+
+local function SetPixelBorder(frame, edgeSize, bgFile)
+	local t = frame.pixelBorder
+	if not t then
+		if not edgeSize then return end
+		t = { bg = frame:CreateTexture(nil, "BACKGROUND") }
+		for _, k in ipairs(pixelBorderEdges) do t[k] = frame:CreateTexture(nil, "BORDER"); t[k]:SetColorTexture(1, 1, 1, 1) end
+		frame.pixelBorder = t
+	end
+	for _, tex in pairs(t) do tex:ClearAllPoints(); tex:SetShown(edgeSize ~= nil) end
+	if not edgeSize then return end
+
+	t.top:SetPoint("TOPLEFT"); t.top:SetPoint("TOPRIGHT"); t.top:SetHeight(edgeSize)
+	t.bottom:SetPoint("BOTTOMLEFT"); t.bottom:SetPoint("BOTTOMRIGHT"); t.bottom:SetHeight(edgeSize)
+	t.left:SetPoint("TOPLEFT", 0, -edgeSize); t.left:SetPoint("BOTTOMLEFT", 0, edgeSize); t.left:SetWidth(edgeSize)
+	t.right:SetPoint("TOPRIGHT", 0, -edgeSize); t.right:SetPoint("BOTTOMRIGHT", 0, edgeSize); t.right:SetWidth(edgeSize)
+	for _, k in ipairs(pixelBorderEdges) do t[k]:SetShown(edgeSize > 0) end
+	t.bg:SetPoint("TOPLEFT", edgeSize, -edgeSize); t.bg:SetPoint("BOTTOMRIGHT", -edgeSize, edgeSize)
+	t.bg:SetTexture(bgFile or "Interface\\BUTTONS\\WHITE8X8.blp")
+end
+
+local function SetPixelBorderColors(frame, border, background, backgroundOpacity)
+	local t = frame.pixelBorder
+	if not t then return end
+	for _, k in ipairs(pixelBorderEdges) do
+		if border then t[k]:SetVertexColor(border.r, border.g, border.b, border.a or 1) else t[k]:SetVertexColor(0, 0, 0, 0) end
+	end
+	if background then
+		t.bg:SetVertexColor(background.r, background.g, background.b, backgroundOpacity or background.a or 1)
+	else
+		t.bg:SetVertexColor(0, 0, 0, 0)
+	end
 end
 
 -- Skin the icon's border
@@ -507,9 +568,14 @@ local function SkinBorder(button, c)
 	elseif (opt == "one") or (opt == "two") then -- skin with single or double pixel border
 		IconTextureTrim(tex, button, true, iconSize - ((opt == "one") and PS(2) or PS(4)))
 		bik:SetAllPoints(button)
-		bik:SetBackdrop((opt == "one") and onePixelBackdrop or twoPixelBackdrop)
-		bik:SetBackdropColor(0, 0, 0, 0)
-		bik:SetBackdropBorderColor(c.r, c.g, c.b, c.a or 1)
+		if button.noBackdrops then
+			SetPixelBorder(bik, (opt == "one") and PS(1) or PS(2))
+			SetPixelBorderColors(bik, c, nil)
+		else
+			bik:SetBackdrop((opt == "one") and onePixelBackdrop or twoPixelBackdrop)
+			bik:SetBackdropColor(0, 0, 0, 0)
+			bik:SetBackdropBorderColor(c.r, c.g, c.b, c.a or 1)
+		end
 		bik:Show()
 		bih:Hide()
 		bib:Hide()
@@ -888,7 +954,7 @@ function MOD:Button_OnAttributeChanged(k, v)
 				barColor = pp.barDebuffColor
 				barBorderColor = pp.barBorderDebuffColor
 				btype = btype or "none"
-				local c = _G.DebuffTypeColor[btype]
+				local c = GetDebuffTypeColor(btype)
 				if c then
 					if pp.debuffColoring then borderColor = c end
 					if pp.barDebuffColoring then barColor = c end
@@ -946,7 +1012,7 @@ local function UpdatePosition(header)
 	local x = group.anchorX * displayWidth  -- anchor location is based on UIParent using fractions of its size for offsets
 	local y = group.anchorY * displayHeight
 	header:ClearAllPoints()
-	PSetPoint(header, pt, UIParent, "BOTTOMLEFT", x, y)
+	PSetPoint(header, pt, UIParent, "BOTTOMLEFT", x + (header.offsetX or 0), y + (header.offsetY or 0)) -- offset makes room for weapon enchants
 	backdrop:ClearAllPoints()
 	PSetPoint(backdrop, pt, UIParent, "BOTTOMLEFT", x + backdrop._deltaX, y + backdrop._deltaY)
 end
@@ -1024,8 +1090,10 @@ function MOD.UpdateHeader(header)
 
 		if group then
 			local red, green = 1, 0 -- anchor color
-			local filter = header:GetAttribute("filter")
+			local filter = header.filter
 			local backdrop = header.anchorBackdrop
+			local attrs = {} -- layout attributes, in the order they are applied
+			local function SetAttribute(k, v) attrs[#attrs + 1] = k; attrs[k] = v end
 
 			header:ClearAllPoints() -- set position any time called
 			if group.enabled then
@@ -1041,19 +1109,19 @@ function MOD.UpdateHeader(header)
 
 				if filter == FILTER_BUFFS then
 					red = 0; green = 1
-					header:SetAttribute("consolidateTo", 0) -- no consolidation
-					if pp.weaponEnchants then header:SetAttribute("weaponTemplate", s) end
+					SetAttribute("consolidateTo", 0) -- no consolidation
+					if pp.weaponEnchants then SetAttribute("weaponTemplate", s) end
 				elseif filter == FILTER_DEBUFFS then
 					if pp.mirrorX then dirX = -dirX end
 					if pp.mirrorY then dirY = -dirY end
 				end
 
-				header:SetAttribute("template", s)
-				header:SetAttribute("sortMethod", pp.sortMethod)
-				header:SetAttribute("sortDirection", pp.sortDirection)
-				header:SetAttribute("separateOwn", pp.separateOwn)
-				header:SetAttribute("wrapAfter", pp.wrapAfter)
-				header:SetAttribute("maxWraps", pp.maxWraps)
+				SetAttribute("template", s)
+				SetAttribute("sortMethod", pp.sortMethod)
+				SetAttribute("sortDirection", pp.sortDirection)
+				SetAttribute("separateOwn", pp.separateOwn)
+				SetAttribute("wrapAfter", pp.wrapAfter)
+				SetAttribute("maxWraps", pp.maxWraps)
 
 				local pt = "TOPRIGHT"
 				if dirX > 0 then
@@ -1061,7 +1129,7 @@ function MOD.UpdateHeader(header)
 				else
 					if dirY > 0 then pt = "BOTTOMRIGHT" end
 				end
-				header:SetAttribute("point", pt) -- relative point on icons based on grow and wrap directions
+				SetAttribute("point", pt) -- relative point on icons based on grow and wrap directions
 				header.anchorPoint = pt
 
 				if pp.showBar then -- adjust backdrop position when bars are outside bounding box
@@ -1099,26 +1167,33 @@ function MOD.UpdateHeader(header)
 					mw = PS(pp.spaceX + iconSize) * wraps
 					mh = PS(pp.spaceY + iconSize) * pp.wrapAfter
 				end
-				header:SetAttribute("xOffset", PS(dx))
-				header:SetAttribute("yOffset", PS(dy))
-				header:SetAttribute("wrapXOffset", PS(wx))
-				header:SetAttribute("wrapYOffset", PS(wy))
-				header:SetAttribute("minWidth", PS(mw))
-				header:SetAttribute("minHeight", PS(mh))
+				SetAttribute("xOffset", PS(dx))
+				SetAttribute("yOffset", PS(dy))
+				SetAttribute("wrapXOffset", PS(wx))
+				SetAttribute("wrapYOffset", PS(wy))
+				SetAttribute("minWidth", PS(mw))
+				SetAttribute("minHeight", PS(mh))
 				-- if IsAltKeyDown() then MOD.Debug("Bufflehead: dx/dy", dx, dy, "wx/wy", wx, wy, "mw/mh", mw, mh) end
 
+				header.layoutAttrs = attrs
 				UpdatePosition(header) -- update screen position based on current settings
-				PSetSize(header, 100, 100)
-				header:Show()
 
-				local k = 1
-				local button = select(1, header:GetChildren())
-				while button do
-					button:SetSize(iconSize, iconSize)
-					button.iconSize = iconSize
-					if k > (pp.wrapAfter * pp.maxWraps) and button:IsShown() then button:Hide() end
-					k = k + 1
-					button = select(k, header:GetChildren())
+				if header.isContainer then
+					MOD.UpdateContainer(header, attrs, iconSize)
+				else
+					for _, k in ipairs(attrs) do header:SetAttribute(k, attrs[k]) end
+					PSetSize(header, 100, 100)
+					header:Show()
+
+					local k = 1
+					local button = select(1, header:GetChildren())
+					while button do
+						button:SetSize(iconSize, iconSize)
+						button.iconSize = iconSize
+						if k > (pp.wrapAfter * pp.maxWraps) and button:IsShown() then button:Hide() end
+						k = k + 1
+						button = select(k, header:GetChildren())
+					end
 				end
 
 				PSetSize(backdrop, mw, mh)
@@ -1151,12 +1226,13 @@ local function UpdatePreviews()
 	if not MOD.showPreviews then MOD.frame:SetScript("OnUpdate", nil) end
 
 	for k, header in pairs(MOD.headers) do
-		local pt = header:GetAttribute("point") -- relative point on icons based on grow and wrap directions
-		local dx = header:GetAttribute("xOffset")
-		local dy = header:GetAttribute("yOffset")
-		local wx = header:GetAttribute("wrapXOffset")
-		local wy = header:GetAttribute("wrapYOffset")
-		local filter = header:GetAttribute("filter")
+		local attrs = header.layoutAttrs or {}
+		local pt = attrs.point -- relative point on icons based on grow and wrap directions
+		local dx = attrs.xOffset
+		local dy = attrs.yOffset
+		local wx = attrs.wrapXOffset
+		local wy = attrs.wrapYOffset
+		local filter = header.filter
 		local columns, rows = pp.wrapAfter, pp.maxWraps
 		local num = rows * columns -- number of icons needed for previewing
 		if num > 40 then num = 40 end -- respect the limit on player buffs/debuffs
@@ -1172,11 +1248,16 @@ local function UpdatePreviews()
 			local row = math.floor((i - 1) / columns) -- which row the button is in, numbered from 0
 
 			if MOD.showPreviews and i <= num then
-				local real = header:GetAttribute("child" .. i)
+				-- an aura container hides itself while previewing
+				local real = not header.isContainer and header:GetAttribute("child" .. i)
 
 				if not real or not real:IsShown() then -- check if real button is currently shown
+					local anchor, ax, ay = header, 0, 0
+					if header.isContainer then -- frames can't be anchored to an aura container
+						anchor = header.anchorBackdrop; ax = -anchor._deltaX; ay = -anchor._deltaY
+					end
 					button:ClearAllPoints()
-					PSetPoint(button, pt, header, pt, (dx * column) + (wx * row), (dy * column) + (wy * row))
+					PSetPoint(button, pt, anchor, pt, (dx * column) + (wx * row) + ax, (dy * column) + (wy * row) + ay)
 					button:SetSize(iconSize, iconSize)
 					button.iconSize = iconSize
 					-- if IsAltKeyDown() then MOD.Debug("Preview: x/y", math.floor((dx * column) + (wx * row)), math.floor((dy * column) + (wy * row)), i, column, row,
@@ -1203,7 +1284,7 @@ local function UpdatePreviews()
 						barBorderColor = pp.barBorderDebuffColor
 						local btype = debuffTypes[count]
 						if btype ~= "none" then
-							local c = _G.DebuffTypeColor[btype]
+							local c = GetDebuffTypeColor(btype)
 							if c then
 								if pp.debuffColoring then borderColor = c end
 								if pp.barDebuffColoring then barColor = c end
@@ -1290,3 +1371,16 @@ function MOD.FormatTime(t, timeFormat, timeSpaces, timeCase)
 	if timeCase then f = string.upper(f) end
 	return f
 end
+
+-- Defer a complete redraw until combat ends
+function MOD.DeferUpdate() updateAll = true end
+
+-- Shared with Container.lua
+MOD.util = {
+	PS = PS, PSetWidth = PSetWidth, PSetSize = PSetSize, PSetPoint = PSetPoint, SetInsets = SetInsets,
+	SkinBorder = SkinBorder, ValidFont = ValidFont, GetFontFlags = GetFontFlags,
+	SetPixelBorder = SetPixelBorder, SetPixelBorderColors = SetPixelBorderColors, pixelBorderEdges = pixelBorderEdges,
+	ShowButton = ShowButton, HideButton = HideButton, UpdatePosition = UpdatePosition,
+	GetWeaponBuffName = GetWeaponBuffName, WeaponDuration = WeaponDuration,
+	justifyH = justifyH, justifyV = justifyV, transparent = transparent,
+}
