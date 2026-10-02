@@ -17,12 +17,13 @@ local CANCEL_BUTTONS = "RightButtonUp"
 local TIME_WIDEST = "0:00:00"
 
 local util = MOD.util
-local PS, PSetWidth, PSetSize, PSetPoint, SetInsets = util.PS, util.PSetWidth, util.PSetSize, util.PSetPoint, util.SetInsets
+local PS, PSetWidth, PSetSize, PSetPoint = util.PS, util.PSetWidth, util.PSetSize, util.PSetPoint
 local SkinBorder, ValidFont, GetFontFlags = util.SkinBorder, util.ValidFont, util.GetFontFlags
 local justifyH, justifyV, transparent = util.justifyH, util.justifyV, util.transparent
 local ShowButton, HideButton, UpdatePosition = util.ShowButton, util.HideButton, util.UpdatePosition
 local GetWeaponBuffName, WeaponDuration = util.GetWeaponBuffName, util.WeaponDuration
-local SetPixelBorder, SetPixelBorderColors, pixelBorderEdges = util.SetPixelBorder, util.SetPixelBorderColors, util.pixelBorderEdges
+local SetPixelBorder, SetMediaBorder, SetPixelBorderColors = util.SetPixelBorder, util.SetMediaBorder, util.SetPixelBorderColors
+local pixelBorderEdges, pixelBorderCorners = util.pixelBorderEdges, util.pixelBorderCorners
 
 local durationTextOptions = nil -- cached options for time text, rebuilt when settings change
 local measureText = nil
@@ -144,10 +145,12 @@ local function AddDebuffTypeTextures(button, textures)
 	for _, tex in pairs(textures) do button:AddDispelTypeTexture(tex, options) end
 end
 
--- Return the textures used to draw a frame's pixel border
+-- Return the textures used to draw a frame's pixel or media border
 local function GetPixelBorderTextures(frame, textures)
-	if frame.pixelBorder then
-		for _, k in ipairs(pixelBorderEdges) do textures[#textures + 1] = frame.pixelBorder[k] end
+	local t = frame.pixelBorder
+	if t then
+		for _, k in ipairs(pixelBorderEdges) do textures[#textures + 1] = t[k] end
+		for _, k in ipairs(pixelBorderCorners) do if t[k] then textures[#textures + 1] = t[k] end end
 	end
 	return textures
 end
@@ -182,7 +185,7 @@ local function SkinContainerBar(button, isDebuff)
 	if not tex then tex = "Interface\\AddOns\\Bufflehead\\Media\\WhiteBar" end
 	bb:SetStatusBarTexture(tex)
 
-	local media = nil -- shared media border, the only kind that needs a backdrop
+	local media = nil -- shared media border, drawn as a nine-slice from the edge file
 	if (opt == "one") or (opt == "two") then -- skin single/double pixel border
 		if (bw > 4) and (bh > 4) then
 			if opt == "one" then delta = 2; width = 1 else delta = 4; width = 2 end
@@ -202,28 +205,12 @@ local function SkinContainerBar(button, isDebuff)
 	local c = pp.barBackgroundColor
 	if pp.barUseForeground then c = barColor end
 
-	-- Draw pixel borders with a texture to avoid reading the size of the frame, which ends up being secret.
-	local key = media and (media .. "|" .. tostring(pp.barBorderWidth) .. "|" .. tostring(width) .. "|" .. tex) or nil
-	if key ~= bbk.backdropKey then
-		bbk.backdropKey = key
-		if media then
-			local drop = { bgFile = tex, edgeFile = media, tile = false, edgeSize = PS(pp.barBorderWidth or 1),
-						   insets = { left = 0, right = 0, top = 0, bottom = 0 } }
-			SetInsets(drop, PS(width))
-			pcall(bbk.SetBackdrop, bbk, drop)
-		else
-			bbk:SetBackdrop(nil)
-		end
-	end
-
 	if media then
-		SetPixelBorder(bbk, nil)
-		bbk:SetBackdropColor(c.r, c.g, c.b, pp.barBackgroundOpacity or c.a)
-		bbk:SetBackdropBorderColor(barBorderColor.r, barBorderColor.g, barBorderColor.b, barBorderColor.a)
+		SetMediaBorder(bbk, media, PS(pp.barBorderWidth or 1), PS(width), tex, bw, bh)
 	else
 		SetPixelBorder(bbk, showBorder and PS(width) or 0, tex)
-		SetPixelBorderColors(bbk, showBorder and barBorderColor or nil, c, pp.barBackgroundOpacity)
 	end
+	SetPixelBorderColors(bbk, showBorder and barBorderColor or nil, c, pp.barBackgroundOpacity)
 	bbk:Show()
 
 	PSetSize(bb, bw - delta, bh - delta) -- set bar size based on border adjustments
@@ -234,7 +221,7 @@ local function SkinContainerBar(button, isDebuff)
 	if isDebuff then
 		local textures = {}
 		if pp.barDebuffColoring then textures[1] = bb:GetStatusBarTexture() end
-		if showBorder and pp.barBorderDebuffColoring and not media then GetPixelBorderTextures(bbk, textures) end
+		if showBorder and pp.barBorderDebuffColoring then GetPixelBorderTextures(bbk, textures) end
 		AddDebuffTypeTextures(button, textures)
 	end
 end
@@ -257,12 +244,12 @@ local function SkinContainerButton(button)
 	local borderColor = isDebuff and pp.iconDebuffColor or pp.iconBuffColor
 	if pp.iconBorder == "default" then borderColor = transparent end
 	button:ClearDispelTypeTextures()
-	xpcall(SkinBorder, geterrorhandler(), button, borderColor)
+	SkinBorder(button, borderColor)
 	if isDebuff and pp.debuffColoring then
 		local opt = pp.iconBorder
 		if (opt == "one") or (opt == "two") then
 			AddDebuffTypeTextures(button, GetPixelBorderTextures(button.iconBackdrop, {}))
-		elseif (opt == "raven") or (opt == "default") or ((opt == "masque") and MOD.MSQ) then
+		elseif (opt == "raven") or (opt == "default") then
 			AddDebuffTypeTextures(button, { button.iconBorder })
 		end
 	end
@@ -348,9 +335,9 @@ local function UpdateWeaponEnchants(container)
 
 	if pp.weaponEnchants and attrs and not MOD.showPreviews and C_Item.GetWeaponEnchantInfo and Enum.WeaponSlot then
 		for _, weapon in ipairs(weaponSlots) do
-			local ok, enchants = pcall(C_Item.GetWeaponEnchantInfo, Enum.WeaponSlot[weapon.name])
-			if ok and enchants then
-				for _, enchant in ipairs(enchants) do
+			local slot = Enum.WeaponSlot[weapon.name]
+			if slot then
+				for _, enchant in ipairs(C_Item.GetWeaponEnchantInfo(slot)) do
 					if enchant.hasEnchant then
 						n = n + 1
 						activeEnchants[n] = enchant
@@ -443,6 +430,7 @@ function MOD.CreateContainer(name, unit, filter)
 			button.filter = filter
 			button.noBackdrops = true
 			MOD:Button_OnLoad(button)
+			button.buttonData = nil -- no Masque
 			button:SetIcon(button.iconTexture)
 			if filter == FILTER_BUFFS then button:SetCancelAuraButtons(CANCEL_BUTTONS) end
 			button:SetTooltipAnchorPoint("ANCHOR_BOTTOM", 0, 0)

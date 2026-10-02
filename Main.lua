@@ -520,32 +520,78 @@ end
 
 -- Draw a border of solid edges around a frame, plus a background, using plain textures instead of a backdrop
 local pixelBorderEdges = { "top", "bottom", "left", "right" }
+local pixelBorderCorners = { "topleft", "topright", "bottomleft", "bottomright" }
+local WHITE_TEXTURE = "Interface\\BUTTONS\\WHITE8X8.blp"
 
-local function SetPixelBorder(frame, edgeSize, bgFile)
+-- Return the frame's border textures (created on first use), all unanchored and hidden
+local function GetPixelBorder(frame, withCorners)
 	local t = frame.pixelBorder
 	if not t then
-		if not edgeSize then return end
 		t = { bg = frame:CreateTexture(nil, "BACKGROUND") }
-		for _, k in ipairs(pixelBorderEdges) do t[k] = frame:CreateTexture(nil, "BORDER"); t[k]:SetColorTexture(1, 1, 1, 1) end
+		for _, k in ipairs(pixelBorderEdges) do t[k] = frame:CreateTexture(nil, "BORDER") end
 		frame.pixelBorder = t
 	end
-	for _, tex in pairs(t) do tex:ClearAllPoints(); tex:SetShown(edgeSize ~= nil) end
+	if withCorners and not t.topleft then
+		for _, k in ipairs(pixelBorderCorners) do t[k] = frame:CreateTexture(nil, "BORDER") end
+	end
+	for _, tex in pairs(t) do tex:ClearAllPoints(); tex:Hide() end
+	return t
+end
+
+local function SetPixelBorder(frame, edgeSize, bgFile)
+	if not frame.pixelBorder and not edgeSize then return end
+	local t = GetPixelBorder(frame)
 	if not edgeSize then return end
 
+	for _, k in ipairs(pixelBorderEdges) do t[k]:SetColorTexture(1, 1, 1, 1); t[k]:SetShown(edgeSize > 0) end
 	t.top:SetPoint("TOPLEFT"); t.top:SetPoint("TOPRIGHT"); t.top:SetHeight(edgeSize)
 	t.bottom:SetPoint("BOTTOMLEFT"); t.bottom:SetPoint("BOTTOMRIGHT"); t.bottom:SetHeight(edgeSize)
 	t.left:SetPoint("TOPLEFT", 0, -edgeSize); t.left:SetPoint("BOTTOMLEFT", 0, edgeSize); t.left:SetWidth(edgeSize)
 	t.right:SetPoint("TOPRIGHT", 0, -edgeSize); t.right:SetPoint("BOTTOMRIGHT", 0, edgeSize); t.right:SetWidth(edgeSize)
-	for _, k in ipairs(pixelBorderEdges) do t[k]:SetShown(edgeSize > 0) end
 	t.bg:SetPoint("TOPLEFT", edgeSize, -edgeSize); t.bg:SetPoint("BOTTOMRIGHT", -edgeSize, edgeSize)
-	t.bg:SetTexture(bgFile or "Interface\\BUTTONS\\WHITE8X8.blp")
+	t.bg:SetTexture(bgFile or WHITE_TEXTURE)
+	t.bg:Show()
+end
+
+local mediaBorderStrips = { left = 0, right = 1, top = 2, bottom = 3, topleft = 4, topright = 5, bottomleft = 6, bottomright = 7 }
+local STRIP_MARGIN, STRIP_TOP, STRIP_BOTTOM = 1 / 128, 1 / 16, 15 / 16
+
+local function SetMediaBorder(frame, edgeFile, edgeSize, inset, bgFile, width, height)
+	local t = GetPixelBorder(frame, true)
+	local tileX = math.max(STRIP_BOTTOM, ((width - (2 * edgeSize)) / edgeSize) - STRIP_TOP) -- one strip per edgeSize
+	local tileY = math.max(STRIP_BOTTOM, ((height - (2 * edgeSize)) / edgeSize) - STRIP_TOP)
+	for k, strip in pairs(mediaBorderStrips) do
+		local tex = t[k]
+		local l, r = (strip / 8) + STRIP_MARGIN, ((strip + 1) / 8) - STRIP_MARGIN
+		tex:SetTexture(edgeFile, true, true) -- repeat wrap so the edges can tile
+		if (k == "top") or (k == "bottom") then
+			tex:SetTexCoord(l, tileX, r, tileX, l, STRIP_TOP, r, STRIP_TOP) -- sideways, length runs along the edge
+		elseif (k == "left") or (k == "right") then
+			tex:SetTexCoord(l, r, STRIP_TOP, tileY)
+		else
+			tex:SetTexCoord(l, r, STRIP_TOP, STRIP_BOTTOM)
+		end
+		tex:Show()
+	end
+	for _, k in ipairs(pixelBorderCorners) do t[k]:SetSize(edgeSize, edgeSize) end
+	t.topleft:SetPoint("TOPLEFT"); t.topright:SetPoint("TOPRIGHT")
+	t.bottomleft:SetPoint("BOTTOMLEFT"); t.bottomright:SetPoint("BOTTOMRIGHT")
+	t.top:SetPoint("TOPLEFT", edgeSize, 0); t.top:SetPoint("TOPRIGHT", -edgeSize, 0); t.top:SetHeight(edgeSize)
+	t.bottom:SetPoint("BOTTOMLEFT", edgeSize, 0); t.bottom:SetPoint("BOTTOMRIGHT", -edgeSize, 0); t.bottom:SetHeight(edgeSize)
+	t.left:SetPoint("TOPLEFT", 0, -edgeSize); t.left:SetPoint("BOTTOMLEFT", 0, edgeSize); t.left:SetWidth(edgeSize)
+	t.right:SetPoint("TOPRIGHT", 0, -edgeSize); t.right:SetPoint("BOTTOMRIGHT", 0, edgeSize); t.right:SetWidth(edgeSize)
+	t.bg:SetPoint("TOPLEFT", inset, -inset); t.bg:SetPoint("BOTTOMRIGHT", -inset, inset)
+	t.bg:SetTexture(bgFile or WHITE_TEXTURE)
+	t.bg:Show()
 end
 
 local function SetPixelBorderColors(frame, border, background, backgroundOpacity)
 	local t = frame.pixelBorder
 	if not t then return end
-	for _, k in ipairs(pixelBorderEdges) do
-		if border then t[k]:SetVertexColor(border.r, border.g, border.b, border.a or 1) else t[k]:SetVertexColor(0, 0, 0, 0) end
+	for k, tex in pairs(t) do
+		if k ~= "bg" then
+			if border then tex:SetVertexColor(border.r, border.g, border.b, border.a or 1) else tex:SetVertexColor(0, 0, 0, 0) end
+		end
 	end
 	if background then
 		t.bg:SetVertexColor(background.r, background.g, background.b, backgroundOpacity or background.a or 1)
@@ -1391,7 +1437,8 @@ function MOD.DeferUpdate() updateAll = true end
 MOD.util = {
 	PS = PS, PSetWidth = PSetWidth, PSetSize = PSetSize, PSetPoint = PSetPoint, SetInsets = SetInsets,
 	SkinBorder = SkinBorder, ValidFont = ValidFont, GetFontFlags = GetFontFlags,
-	SetPixelBorder = SetPixelBorder, SetPixelBorderColors = SetPixelBorderColors, pixelBorderEdges = pixelBorderEdges,
+	SetPixelBorder = SetPixelBorder, SetMediaBorder = SetMediaBorder, SetPixelBorderColors = SetPixelBorderColors,
+	pixelBorderEdges = pixelBorderEdges, pixelBorderCorners = pixelBorderCorners,
 	ShowButton = ShowButton, HideButton = HideButton, UpdatePosition = UpdatePosition,
 	GetWeaponBuffName = GetWeaponBuffName, WeaponDuration = WeaponDuration,
 	justifyH = justifyH, justifyV = justifyV, transparent = transparent,
