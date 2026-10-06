@@ -415,6 +415,13 @@ enchantEvents:SetScript("OnEvent", function()
 	end
 end)
 
+-- Stand-ins for engine button methods that Masque calls, see initializeFrame below
+local function ContainerButton_GetSize(button)
+	local size = button.iconSize or pp.iconSize
+	return size, size
+end
+local function ContainerButton_GetObjectType() return "Button" end
+
 -- Create an aura container for a group of player buffs or debuffs
 function MOD.CreateContainer(name, unit, filter)
 	local container = CreateFrame("AuraContainer", name, UIParent, "CustomAuraContainerTemplate")
@@ -429,8 +436,9 @@ function MOD.CreateContainer(name, unit, filter)
 		initializeFrame = function(button) -- called when the engine needs more buttons, possibly in combat
 			button.filter = filter
 			button.noBackdrops = true
+			button.GetSize = ContainerButton_GetSize
+			if button:GetObjectType() ~= "Button" then button.GetObjectType = ContainerButton_GetObjectType end
 			MOD:Button_OnLoad(button)
-			button.buttonData = nil -- no Masque
 			button:SetIcon(button.iconTexture)
 			if filter == FILTER_BUFFS then button:SetCancelAuraButtons(CANCEL_BUTTONS) end
 			button:SetTooltipAnchorPoint("ANCHOR_BOTTOM", 0, 0)
