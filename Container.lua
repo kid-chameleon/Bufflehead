@@ -249,8 +249,8 @@ local function SkinContainerButton(button)
 		local opt = pp.iconBorder
 		if (opt == "one") or (opt == "two") then
 			AddDebuffTypeTextures(button, GetPixelBorderTextures(button.iconBackdrop, {}))
-		elseif (opt == "raven") or (opt == "default") then
-			AddDebuffTypeTextures(button, { button.iconBorder })
+		elseif (opt == "raven") or (opt == "default") or (opt == "masque") then
+			AddDebuffTypeTextures(button, { button.iconBorder }) -- Masque skins this texture but keeps its color
 		end
 	end
 
