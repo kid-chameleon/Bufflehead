@@ -288,7 +288,7 @@ function MOD:OnEnable()
 	if addonEnabled then return end -- only run this code once
 	addonEnabled = true
 
-	MOD.db = LibStub("AceDB-3.0"):New("BuffleheadDB", MOD.DefaultProfile) -- get current profile
+	MOD.db = LibStub("AceDB-3.0"):New("BuffleheadDB", MOD.DefaultProfile, true) -- true = all characters share the "Default" profile instead of one per character
 	pg = MOD.db.global; pp = MOD.db.profile
 
 	MOD:RegisterChatCommand("bufflehead", function() MOD.OptionsPanel() end)
@@ -415,40 +415,33 @@ local function RestoreAuraFrameEvents(frame)
 	end
 end
 
+local function HideBlizzFrame(frame)
+	frame:Hide()
+	frame:UnregisterAllEvents()
+	if not frame.buffleheadShowHook then
+		frame.buffleheadShowHook = true
+		local rawHide = frame.HideBase or frame.Hide
+		hooksecurefunc(frame, "Show", function(f) if blizzHidden then rawHide(f) end end)
+	end
+end
+
 -- Show or hide the blizzard buff frames, called during update so synched with other changes
 function MOD.CheckBlizzFrames()
 	if not MOD.isClassic and C_PetBattles and C_PetBattles.IsInBattle() then return end -- don't change visibility of any frame during pet battles
-	local frame = _G.BuffFrame
-	local hide, show = false, false
-	local visible = frame:IsShown()
-	if visible then
-		if pg.hideBlizz then hide = true end
-	else
-		if pg.hideBlizz then show = false else show = blizzHidden end -- only show if this addon hid the frame
-	end
-	-- MOD.Debug("Bufflehead: hide/show", key, "hide:", hide, "show:", show, "vis: ", visible)
-	if hide then
-		BuffFrame:Hide()
-		BuffFrame:UnregisterAllEvents()
+	if pg.hideBlizz then
 		blizzHidden = true
-		if not MOD.isClassic and DebuffFrame then
-			DebuffFrame:Hide();
-			DebuffFrame:UnregisterAllEvents()
-		end
-		if TemporaryEnchantFrame then
-			TemporaryEnchantFrame:Hide();
-		end
-	elseif show then
+		HideBlizzFrame(BuffFrame)
+		if not MOD.isClassic and DebuffFrame then HideBlizzFrame(DebuffFrame) end
+		if TemporaryEnchantFrame then TemporaryEnchantFrame:Hide() end
+	elseif blizzHidden then -- only show if this addon hid the frames
+		blizzHidden = false -- clear first so the Show hooks let the frames stay visible
 		BuffFrame:Show()
 		RestoreAuraFrameEvents(BuffFrame)
-		blizzHidden = false
 		if not MOD.isClassic and DebuffFrame then
-			DebuffFrame:Show();
+			DebuffFrame:Show()
 			RestoreAuraFrameEvents(DebuffFrame)
 		end
-		if TemporaryEnchantFrame then
-			TemporaryEnchantFrame:Show();
-		end
+		if TemporaryEnchantFrame then TemporaryEnchantFrame:Show() end
 	end
 end
 
